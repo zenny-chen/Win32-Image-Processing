@@ -19,6 +19,8 @@ static const char s_appName[] = "Image Processing";
 static HWND s_browseButton = NULL;
 static HWND s_imagePathEdit = NULL;
 static HWND s_loadImageButton = NULL;
+static HWND s_generateImageButton = NULL;
+static HWND s_optionComboBox = NULL;
 static HBITMAP s_hBitmap = NULL;
 static HDC s_hMemDC = NULL;
 
@@ -38,9 +40,208 @@ static inline void ClearBitmapResources(void)
 
 enum
 {
-    WINDOW_WIDTH = 800,
+    WINDOW_WIDTH = 960,
     WINDOW_HEIGHT = 640
 };
+
+// Open the file browser dialog
+static void BrowseFileOpenDialog(HINSTANCE hInstance, HWND hWnd)
+{
+    char filePath[MAX_PATH] = { '\0' };
+    char fileTitle[MAX_PATH] = { '\0' };
+
+    OPENFILENAMEA ofn = {
+        .lStructSize = sizeof(ofn),
+        .hwndOwner = hWnd,
+        .hInstance = hInstance,
+        .lpstrFilter = "Image File(*.bmp,*.tif,*.tiff)\0*.bmp;*.tif;*.tiff;\0\0",
+        .nFilterIndex = 1,
+        .lpstrFile = filePath,
+        .nMaxFile = sizeof(filePath),
+        .lpstrFileTitle = fileTitle,
+        .nMaxFileTitle = sizeof(fileTitle),
+        .Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER
+    };
+    if (GetOpenFileNameA(&ofn))
+    {
+        SetWindowTextA(s_imagePathEdit, filePath);
+        UpdateWindow(hWnd);
+    }
+}
+
+// Load an image file (Currently supports BMP and TIFF)
+static void LoadImageFile(HWND hWnd)
+{
+    char filePath[MAX_PATH] = { '\0' };
+    int len = GetWindowTextA(s_imagePathEdit, filePath, sizeof(filePath));
+    if (len < 5 || len >= MAX_PATH) return;
+
+    char* dotPos = strrchr(filePath, '.');
+    if (dotPos == NULL || strlen(dotPos) > 7) return;
+
+    enum { IMAGE_TYPE_NONE, IMAGE_TYPE_BMP, IMAGE_TYPE_TIFF } imageType = IMAGE_TYPE_NONE;
+
+    if (strcmp(dotPos, ".bmp") == 0) {
+        imageType = IMAGE_TYPE_BMP;
+    }
+    else if (strcmp(dotPos, ".tif") == 0 || strcmp(dotPos, ".tiff") == 0) {
+        imageType = IMAGE_TYPE_TIFF;
+    }
+
+    // Image type not supported
+    if (imageType == IMAGE_TYPE_NONE) return;
+
+    ClearBitmapResources();
+
+    if (imageType == IMAGE_TYPE_BMP) {
+        s_hBitmap = LoadImageA(NULL, filePath, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
+    }
+    else
+    {
+        // ==== Use WIC to load a TIFF image file ====
+        // Transfer ASCII-based file path to wide-char string buffer
+        WCHAR filePathW[MAX_PATH] = { L'\0' };
+        const int wideStrLen = MultiByteToWideChar(CP_ACP, 0, filePath, -1, NULL, 0);
+        MultiByteToWideChar(CP_ACP, 0, filePath, -1, filePathW, wideStrLen);
+
+        IWICImagingFactory2* pFactory = NULL;
+        IWICBitmapDecoder* pBitmapDecoder = NULL;
+        IWICBitmapFrameDecode* pBitmapFrame = NULL;
+        BYTE* pixelBuffer = NULL;
+        do
+        {
+            // Create the COM imaging factory
+            HRESULT hr = CoCreateInstance(
+                &CLSID_WICImagingFactory2,
+                NULL,
+                CLSCTX_INPROC_SERVER,
+                &IID_IWICImagingFactory2,
+                &pFactory);
+            if (hr != S_OK) break;
+
+            hr = pFactory->lpVtbl->CreateDecoderFromFilename(pFactory, filePathW, NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &pBitmapDecoder);
+            if (hr != S_OK) break;
+
+            UINT frameCount = 0;
+            hr = pBitmapDecoder->lpVtbl->GetFrameCount(pBitmapDecoder, &frameCount);
+            if (hr != S_OK) break;
+
+            // Create the decoded bitmap frame
+            hr = pBitmapDecoder->lpVtbl->GetFrame(pBitmapDecoder, frameCount - 1, &pBitmapFrame);
+            if (hr != S_OK) break;
+
+            UINT width = 0, height = 0;
+            hr = pBitmapFrame->lpVtbl->GetSize(pBitmapFrame, &width, &height);
+            if (hr != S_OK) break;
+
+            // Get the frame pixel format
+            WICPixelFormatGUID pixelFormat = { 0 };
+            hr = pBitmapFrame->lpVtbl->GetPixelFormat(pBitmapFrame, &pixelFormat);
+            if (hr != S_OK) break;
+
+            UINT nComponents = 0;
+            if (IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat24bppBGR) || IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat24bppRGB)) {
+                nComponents = 3;
+            }
+            else if (IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat32bppRGBA) || IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat32bppBGRA)) {
+                nComponents = 4;
+            }
+            else
+            {
+                MessageBoxA(hWnd, "The pixel format is not supported!", "Attention", MB_OK);
+                break;
+            }
+
+            // Create the pixel buffer and copy the pixels
+            const UINT nBytesPerRow = width * nComponents;
+            const UINT bufferSize = nBytesPerRow * height;
+            pixelBuffer = calloc(bufferSize, 1);
+            hr = pBitmapFrame->lpVtbl->CopyPixels(pBitmapFrame, NULL, nBytesPerRow, bufferSize, pixelBuffer);
+            if (hr != S_OK) break;
+
+            // Create the BITMAP instance
+            s_hBitmap = CreateBitmap(width, height, 1U, nComponents * 8U, pixelBuffer);
+        }
+        while (false);
+
+        if (pixelBuffer != NULL) {
+            free(pixelBuffer);
+        }
+        if (pBitmapFrame != NULL) {
+            pBitmapFrame->lpVtbl->Release(pBitmapFrame);
+        }
+        if (pBitmapDecoder != NULL) {
+            pBitmapDecoder->lpVtbl->Release(pBitmapDecoder);
+        }
+        if (pFactory != NULL) {
+            pFactory->lpVtbl->Release(pFactory);
+        }
+    }
+}
+
+static void ClearPreviousBitmap(void)
+{
+    if (s_hBitmap == NULL) return;
+
+    // Get the current bitmap size
+    BITMAP bmp = { 0 };
+    GetObject(s_hBitmap, sizeof(BITMAP), &bmp);
+
+    ClearBitmapResources();
+
+    // BITMAP uses BGRA8888 format by default,
+    // So each pixel occupies 4 bytes
+    unsigned* pixelBuffer = calloc(bmp.bmWidth * bmp.bmHeight, 4);
+    if (pixelBuffer == NULL) return;
+
+    for (int row = 0; row < bmp.bmHeight; ++row)
+    {
+        const unsigned color = 0xffffffffU;
+        for (int col = 0; col < bmp.bmWidth; ++col) {
+            pixelBuffer[row * bmp.bmWidth + col] = color;
+        }
+    }
+
+    // Create the new BITMAP instance
+    s_hBitmap = CreateBitmap(bmp.bmWidth, bmp.bmHeight, 1U, 4U * 8U, pixelBuffer);
+
+    free(pixelBuffer);
+}
+
+// Generate a custom bitmap (with red, green and blue strips)
+static void GenerateCustomBitmap(void)
+{
+    ClearBitmapResources();
+
+    const int width = 480, height = 480;
+    // BITMAP uses BGRA8888 format by default,
+    // So each pixel occupies 4 bytes
+    unsigned* pixelBuffer = calloc(width * height, 4);
+    if (pixelBuffer == NULL) return;
+
+    for (int row = 0; row < height; ++row)
+    {
+        unsigned color = 0;
+        if (row < 480 / 3) {
+            color = 0xfff01010U; // Red
+        }
+        else if (row < 480 * 2 / 3) {
+            color = 0xff10f010U; // Green
+        }
+        else {
+            color = 0xff1010f0U; // Blue
+        }
+
+        for (int col = 0; col < width; ++col) {
+            pixelBuffer[row * width + col] = color;
+        }
+    }
+    
+    // Create the BITMAP instance
+    s_hBitmap = CreateBitmap(width, height, 1U, 4U * 8U, pixelBuffer);
+
+    free(pixelBuffer);
+}
 
 // Window message process procedure
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -69,138 +270,32 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         if ((HWND)lParam == s_browseButton)
         {
             const DWORD notifCode = HIWORD(wParam);
-            if (notifCode == BN_CLICKED)
-            {
-                char filePath[MAX_PATH] = { '\0' };
-                char fileTitle[MAX_PATH] = { '\0' };
-
-                OPENFILENAMEA ofn = {
-                    .lStructSize = sizeof(ofn),
-                    .hwndOwner = hWnd,
-                    .hInstance = hInstance,
-                    .lpstrFilter = "Image File(*.bmp,*.tif,*.tiff)\0*.bmp;*.tif;*.tiff;\0\0",
-                    .nFilterIndex = 1,
-                    .lpstrFile = filePath,
-                    .nMaxFile = sizeof(filePath),
-                    .lpstrFileTitle = fileTitle,
-                    .nMaxFileTitle = sizeof(fileTitle),
-                    .Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER
-                };
-                if (GetOpenFileNameA(&ofn))
-                {
-                    SetWindowTextA(s_imagePathEdit, filePath);
-                    UpdateWindow(hWnd);
-                }
+            if (notifCode == BN_CLICKED) {
+                BrowseFileOpenDialog(hInstance, hWnd);
             }
         }
         else if ((HWND)lParam == s_loadImageButton)
         {
             const DWORD notifCode = HIWORD(wParam);
-            if (notifCode == BN_CLICKED)
+            if (notifCode == BN_CLICKED) {
+                LoadImageFile(hWnd);
+            }
+        }
+        else if ((HWND)lParam == s_generateImageButton)
+        {
+            const LRESULT itemIndex = SendMessageA(s_optionComboBox, CB_GETCURSEL, 0, 0);
+            switch(itemIndex)
             {
-                char filePath[MAX_PATH] = { '\0' };
-                int len = GetWindowTextA(s_imagePathEdit, filePath, sizeof(filePath));
-                if (len < 5 || len >= MAX_PATH) break;
+            case 0:
+                ClearPreviousBitmap();
+                break;
 
-                char* dotPos = strrchr(filePath, '.');
-                if (dotPos == NULL || strlen(dotPos) > 7) break;
+            case 1:
+                GenerateCustomBitmap();
+                break;
 
-                enum { IMAGE_TYPE_NONE, IMAGE_TYPE_BMP, IMAGE_TYPE_TIFF } imageType = IMAGE_TYPE_NONE;
-
-                if (strcmp(dotPos, ".bmp") == 0) {
-                    imageType = IMAGE_TYPE_BMP;
-                }
-                else if (strcmp(dotPos, ".tif") == 0 || strcmp(dotPos, ".tiff") == 0) {
-                    imageType = IMAGE_TYPE_TIFF;
-                }
-
-                if (imageType == IMAGE_TYPE_NONE) break;
-
-                ClearBitmapResources();
-
-                if (imageType == IMAGE_TYPE_BMP) {
-                    s_hBitmap = LoadImageA(NULL, filePath, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION);
-                }
-                else
-                {
-                    // Transfer ASCII-based file path to wide-char string buffer
-                    WCHAR filePathW[MAX_PATH] = { L'\0' };
-                    const int wideStrLen = MultiByteToWideChar(CP_ACP, 0, filePath, -1, NULL, 0);
-                    MultiByteToWideChar(CP_ACP, 0, filePath, -1, filePathW, wideStrLen);
-
-                    IWICImagingFactory2* pFactory = NULL;
-                    IWICBitmapDecoder* pBitmapDecoder = NULL;
-                    IWICBitmapFrameDecode* pBitmapFrame = NULL;
-                    BYTE* pixelBuffer = NULL;
-                    do
-                    {
-                        // Create the COM imaging factory
-                        HRESULT hr = CoCreateInstance(
-                            &CLSID_WICImagingFactory2,
-                            NULL,
-                            CLSCTX_INPROC_SERVER,
-                            &IID_IWICImagingFactory2,
-                            &pFactory);
-                        if (hr != S_OK) break;
-
-                        hr = pFactory->lpVtbl->CreateDecoderFromFilename(pFactory, filePathW, NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &pBitmapDecoder);
-                        if (hr != S_OK) break;
-
-                        UINT frameCount = 0;
-                        hr = pBitmapDecoder->lpVtbl->GetFrameCount(pBitmapDecoder, &frameCount);
-                        if (hr != S_OK) break;
-
-                        // Create the decoded bitmap frame
-                        hr = pBitmapDecoder->lpVtbl->GetFrame(pBitmapDecoder, frameCount - 1, &pBitmapFrame);
-                        if (hr != S_OK) break;
-
-                        UINT width = 0, height = 0;
-                        hr = pBitmapFrame->lpVtbl->GetSize(pBitmapFrame, &width, &height);
-                        if (hr != S_OK) break;
-
-                        // Get the frame pixel format
-                        WICPixelFormatGUID pixelFormat = { 0 };
-                        hr = pBitmapFrame->lpVtbl->GetPixelFormat(pBitmapFrame, &pixelFormat);
-                        if (hr != S_OK) break;
-
-                        UINT nComponents = 0;
-                        if (IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat24bppBGR) || IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat24bppRGB)) {
-                            nComponents = 3;
-                        }
-                        else if (IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat32bppRGBA) || IsEqualGUID(&pixelFormat, &GUID_WICPixelFormat32bppBGRA)) {
-                            nComponents = 4;
-                        }
-                        else
-                        {
-                            MessageBoxA(hWnd, "The pixel format is not supported!", "Attention", MB_OK);
-                            break;
-                        }
-
-                        // Create the pixel buffer and copy the pixels
-                        const UINT nBytesPerRow = width * nComponents;
-                        const UINT bufferSize = nBytesPerRow * height;
-                        pixelBuffer = calloc(bufferSize, 1);
-                        hr = pBitmapFrame->lpVtbl->CopyPixels(pBitmapFrame, NULL, nBytesPerRow, bufferSize, pixelBuffer);
-                        if (hr != S_OK) break;
-
-                        // Create the BITMAP instance
-                        s_hBitmap = CreateBitmap(width, height, 1U, nComponents * 8U, pixelBuffer);
-                    }
-                    while (false);
-
-                    if (pixelBuffer != NULL) {
-                        free(pixelBuffer);
-                    }
-                    if (pBitmapFrame != NULL) {
-                        pBitmapFrame->lpVtbl->Release(pBitmapFrame);
-                    }
-                    if (pBitmapDecoder != NULL) {
-                        pBitmapDecoder->lpVtbl->Release(pBitmapDecoder);
-                    }
-                    if (pFactory != NULL) {
-                        pFactory->lpVtbl->Release(pFactory);
-                    }
-                }
+            default:
+                break;
             }
         }
     }
@@ -218,7 +313,6 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             }
             
             HBITMAP hOldBitmap = SelectObject(s_hMemDC, s_hBitmap);
-
             BITMAP bmp = { 0 };
             GetObject(s_hBitmap, sizeof(BITMAP), &bmp);
             const int x = (WINDOW_WIDTH - bmp.bmWidth) / 2;
@@ -226,8 +320,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             BitBlt(hdc, x, y, bmp.bmWidth, bmp.bmHeight, s_hMemDC, 0, 0, SRCCOPY);
 
             SelectObject(s_hMemDC, hOldBitmap);
-            RECT rect = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
+            
+            const RECT rect = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
             InvalidateRect(hWnd, &rect, TRUE);
+            
             UpdateWindow(hWnd);
         }
 
@@ -260,7 +356,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         break;
     }
 
-    return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    return DefWindowProcA(hWnd, uMsg, wParam, lParam);
 }
 
 // Initialize the current app instance and return the handle of the window created.
@@ -354,7 +450,7 @@ int main(int argc, const char* argv[])
         WS_VISIBLE | WS_CHILD | WS_BORDER | ES_LEFT | ES_AUTOHSCROLL | SS_CENTERIMAGE,
         90,
         12,
-        400,
+        300,
         26,
         hWnd,
         NULL,
@@ -366,7 +462,7 @@ int main(int argc, const char* argv[])
         WC_BUTTON,          // Predefined class;
         "Load Image",       // Button text 
         WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
-        500,                        // x position 
+        400,                        // x position 
         10,                         // y position 
         90,                     // Button width
         30,                     // Button height
@@ -374,6 +470,42 @@ int main(int argc, const char* argv[])
         NULL,                   // No menu.
         hInstance,
         NULL);                  // Pointer not needed.
+
+    s_generateImageButton = CreateWindowExA(
+        0,
+        WC_BUTTON,          // Predefined class;
+        "Generate Image",   // Button text 
+        WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+        510,                        // x position
+        10,                         // y position
+        120,                    // Button width
+        30,                     // Button height
+        hWnd,               // Parent window
+        NULL,                   // No menu.
+        hInstance,
+        NULL);                  // Pointer not needed.
+
+    s_optionComboBox = CreateWindowExA(
+        0,
+        WC_COMBOBOX,
+        "",
+        WS_CHILD | WS_OVERLAPPED | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+        640,
+        10,
+        90,
+        200,
+        hWnd,
+        NULL,
+        hInstance,
+        NULL);
+
+    // Add string to comboBox.
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Clear");
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Custom");
+
+    // Send the CB_SETCURSEL message to display an initial item in the selection field
+    UINT const selectedItemIndex = 0;
+    SendMessageA(s_optionComboBox, CB_SETCURSEL, selectedItemIndex, 0);
 
     UpdateWindow(hWnd);
 
