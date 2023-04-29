@@ -14,6 +14,7 @@
 #include <CommCtrl.h>
 #include <wincodecsdk.h>
 
+#include "cross_complex.h"
 
 static const char s_appName[] = "Image Processing";
 static HWND s_browseButton = NULL;
@@ -368,11 +369,79 @@ static void ReversePixelBitmap(void)
     free(dstImageData);
 }
 
+// Image Binarization
+static void ImageBinarize(void)
+{
+    if (s_hBitmap == NULL) return;
+
+    // Get the current bitmap size
+    BITMAP bmp = { 0 };
+    GetObjectA(s_hBitmap, sizeof(BITMAP), &bmp);
+
+    const int orgWidth = (int)bmp.bmWidth;
+    const int orgHeight = (int)bmp.bmHeight;
+    const int orgComponents = (int)(bmp.bmBitsPixel / 8);
+    const int orgWidthBytes = (int)bmp.bmWidthBytes;
+    const int residuleWidthBytes = orgWidthBytes - orgWidth * orgComponents;
+    const int orgImageBufferSize = orgWidthBytes * orgHeight;
+
+    uint8_t* orgImageData = calloc(orgImageBufferSize, 1);
+    if (orgImageData == NULL) exit(-1);
+    // Read the raw data from the given HBITMAP object
+    if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
+    {
+        puts("Read original image data failed in `ColorToGrayTransformBitmap`!");
+        free(orgImageData);
+        return;
+    }
+
+    ClearBitmapResources();
+
+    // The destination BITMAP uses BGRA8888 format,
+    // So each pixel occupies 4 bytes
+    uint8_t* dstImageData = calloc(orgWidth * orgHeight, 4);
+    if (dstImageData == NULL) exit(-1);
+
+    int orgIndex = 0, dstIndex = 0;
+    for (int row = 0; row < orgHeight; ++row)
+    {
+        for (int col = 0; col < orgWidth; ++col)
+        {
+            const unsigned b = orgImageData[orgIndex + 0];
+            const unsigned g = orgImageData[orgIndex + 1];
+            const unsigned r = orgImageData[orgIndex + 2];
+
+            // First, convert to gray image applying: I = 0.3B + 0.59G + 0.11R
+            unsigned y = (unsigned)(0.3f * b + 0.59f * g + 0.11f * r);
+
+            // Then, binarize the pixel according to the specified threshold
+            const unsigned threshold = 128U;
+            y = y > threshold ? 255U : 0U;
+
+            dstImageData[dstIndex++] = y;       // b
+            dstImageData[dstIndex++] = y;       // g
+            dstImageData[dstIndex++] = y;       // r
+            dstImageData[dstIndex++] = 255U;    // a
+
+            orgIndex += orgComponents;
+        }
+
+        orgIndex += residuleWidthBytes;
+    }
+
+    // Create the new BITMAP instance
+    s_hBitmap = CreateBitmap(orgWidth, orgHeight, 1U, 4U * 8U, dstImageData);
+
+    free(orgImageData);
+    free(dstImageData);
+}
+
 static void(* const s_comboBoxOperations[])(void) = {
     &ClearPreviousBitmap,
     &GenerateCustomBitmap,
     &ColorToGrayTransformBitmap,
-    &ReversePixelBitmap
+    &ReversePixelBitmap,
+    &ImageBinarize
 };
 
 // Window message process procedure
@@ -626,6 +695,7 @@ int main(int argc, const char* argv[])
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Custom");  // Generate a custom bitmap (with red, green and blue strips)
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Color to Gray");   // Color to gray operation
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Reverse Pixel");   // Reverse Pixel operation
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Binarization");    // Image Binarization
 
     // Send the CB_SETCURSEL message to display an initial item in the selection field
     const WPARAM selectedItemIndex = 0;
