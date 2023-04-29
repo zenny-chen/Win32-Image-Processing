@@ -179,6 +179,20 @@ static void LoadImageFile(HWND hWnd)
     }
 }
 
+// Combo-box option operation types
+enum OPTION_OP_TYPES
+{
+    // Clear previous bitmap using the background (white) color
+    CLEAR_PREVIOUS_OP_TYPE,
+
+    // Generate a custom bitmap (with red, green and blue strips)
+    GENERATE_CUSTOM_OP_TYPE,
+
+    // Color to gray operation
+    COLOR_TO_GRAY_OP_TYPE
+};
+
+// Clear previous bitmap using the background (white) color
 static void ClearPreviousBitmap(void)
 {
     if (s_hBitmap == NULL) return;
@@ -196,7 +210,7 @@ static void ClearPreviousBitmap(void)
 
     for (int row = 0; row < bmp.bmHeight; ++row)
     {
-        const unsigned color = 0xffffffffU;
+        const unsigned color = 0xffff'ffffU;
         for (int col = 0; col < bmp.bmWidth; ++col) {
             pixelBuffer[row * bmp.bmWidth + col] = color;
         }
@@ -243,6 +257,69 @@ static void GenerateCustomBitmap(void)
     free(pixelBuffer);
 }
 
+// Color to gray operation
+static void ColorToGrayTransformBitmap(void)
+{
+    if (s_hBitmap == NULL) return;
+
+    // Get the current bitmap size
+    BITMAP bmp = { 0 };
+    GetObject(s_hBitmap, sizeof(BITMAP), &bmp);
+
+    const int orgWidth = (int)bmp.bmWidth;
+    const int orgHeight = (int)bmp.bmHeight;
+    const int orgComponents = (int)(bmp.bmBitsPixel / 8);
+    const int orgWidthBytes = (int)bmp.bmWidthBytes;
+    const int residuleWidthBytes = orgWidthBytes - orgWidth * orgComponents;
+    const int orgImageBufferSize = orgWidthBytes * orgHeight;
+
+    uint8_t* orgImageData = calloc(orgImageBufferSize, 1);
+    if (orgImageData == NULL) exit(-1);
+    // Read the raw data from the given HBITMAP object
+    if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
+    {
+        puts("Read original image data failed in `ColorToGrayTransformBitmap`!");
+        free(orgImageData);
+        return;
+    }
+
+    ClearBitmapResources();
+
+    // The destination BITMAP uses BGRA8888 format,
+    // So each pixel occupies 4 bytes
+    uint8_t* dstImageData = calloc(orgWidth * orgHeight, 4);
+    if (dstImageData == NULL) exit(-1);
+
+    int orgIndex = 0, dstIndex = 0;
+    for (int row = 0; row < orgHeight; ++row)
+    {
+        for (int col = 0; col < orgWidth; ++col)
+        {
+            const unsigned b = orgImageData[orgIndex + 0];
+            const unsigned g = orgImageData[orgIndex + 1];
+            const unsigned r = orgImageData[orgIndex + 2];
+            
+            // Apply: I = 0.3B + 0.59G + 0.11R
+            const unsigned y = (unsigned)(0.3f * b + 0.59f * g + 0.11f * r);
+
+            dstImageData[dstIndex++] = y;       // b
+            dstImageData[dstIndex++] = y;       // g
+            dstImageData[dstIndex++] = y;       // r
+            dstImageData[dstIndex++] = 255U;    // a
+
+            orgIndex += orgComponents;
+        }
+
+        orgIndex += residuleWidthBytes;
+    }
+
+    // Create the new BITMAP instance
+    s_hBitmap = CreateBitmap(orgWidth, orgHeight, 1U, 4U * 8U, dstImageData);
+
+    free(orgImageData);
+    free(dstImageData);
+}
+
 // Window message process procedure
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -283,15 +360,19 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
         else if ((HWND)lParam == s_generateImageButton)
         {
-            const LRESULT itemIndex = SendMessageA(s_optionComboBox, CB_GETCURSEL, 0, 0);
-            switch(itemIndex)
+            const enum OPTION_OP_TYPES opOptionIndex = (enum OPTION_OP_TYPES)SendMessageA(s_optionComboBox, CB_GETCURSEL, 0, 0);
+            switch(opOptionIndex)
             {
-            case 0:
+            case CLEAR_PREVIOUS_OP_TYPE:
                 ClearPreviousBitmap();
                 break;
 
-            case 1:
+            case GENERATE_CUSTOM_OP_TYPE:
                 GenerateCustomBitmap();
+                break;
+
+            case COLOR_TO_GRAY_OP_TYPE:
+                ColorToGrayTransformBitmap();
                 break;
 
             default:
@@ -491,8 +572,8 @@ int main(int argc, const char* argv[])
         "",
         WS_CHILD | WS_OVERLAPPED | WS_VISIBLE | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
         640,
-        10,
-        90,
+        12,
+        130,
         200,
         hWnd,
         NULL,
@@ -500,11 +581,12 @@ int main(int argc, const char* argv[])
         NULL);
 
     // Add string to comboBox.
-    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Clear");
-    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Custom");
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Clear");   // CLEAR_PREVIOUS_OP_TYPE
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Custom");  // GENERATE_CUSTOM_OP_TYPE
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Color to Gray"); // COLOR_TO_GRAY_OP_TYPE
 
     // Send the CB_SETCURSEL message to display an initial item in the selection field
-    UINT const selectedItemIndex = 0;
+    const UINT selectedItemIndex = CLEAR_PREVIOUS_OP_TYPE;
     SendMessageA(s_optionComboBox, CB_SETCURSEL, selectedItemIndex, 0);
 
     UpdateWindow(hWnd);
