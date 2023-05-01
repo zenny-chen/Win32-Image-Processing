@@ -42,7 +42,9 @@ static inline void ClearBitmapResources(void)
 enum
 {
     WINDOW_WIDTH = 960,
-    WINDOW_HEIGHT = 640
+    WINDOW_HEIGHT = 640,
+
+    IMAGE_BINARIZE_THRESHOLD = 128
 };
 
 // Open the file browser dialog
@@ -415,8 +417,8 @@ static void ImageBinarize(void)
             unsigned y = (unsigned)(0.3f * b + 0.59f * g + 0.11f * r);
 
             // Then, binarize the pixel according to the specified threshold
-            const unsigned threshold = 128U;
-            y = y > threshold ? 255U : 0U;
+            const unsigned threshold = IMAGE_BINARIZE_THRESHOLD;
+            y = y < threshold ? 0U : 255U;
 
             dstImageData[dstIndex++] = y;       // b
             dstImageData[dstIndex++] = y;       // g
@@ -489,8 +491,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 s_comboBoxOperations[itemIndex]();
             }
         }
+        break;
     }
-    break;
 
     case WM_PAINT:
     {
@@ -519,10 +521,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
 
         EndPaint(hWnd, &ps);
+        break;
     }
 
     case WM_ERASEBKGND:
-        return 1;
+        return TRUE;
 
     case WM_SIZE:
         UpdateWindow(hWnd);
@@ -541,7 +544,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         case VK_SPACE:
             break;
         }
-        return 0;
+        return FALSE;
 
     default:
         break;
