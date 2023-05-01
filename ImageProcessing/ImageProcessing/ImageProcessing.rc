@@ -1,0 +1,48 @@
+﻿#include "resource.h"
+
+#include <sdkddkver.h>
+#include <Windows.h>
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)
+LANGUAGE 4, 2
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// ImageBinarize Dialog Box
+//
+IDD_IMAGE_BINARIZE_BOX DIALOGEX 0, 0, 180, 62
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Image Binarization Options"
+FONT 9, "MS Shell Dlg"
+BEGIN
+    CTEXT           "Image Binarization Threshold", IDC_STATIC, 10, 14, 100, 10, SS_NOPREFIX
+    EDITTEXT        IDC_IMAGE_BINARIZE_THRESHOLD_EDIT, 115, 13, 50, 10
+    DEFPUSHBUTTON   "Default", IDYES, 10, 41, 40, 14, WS_GROUP
+    DEFPUSHBUTTON   "Cancel", IDCANCEL, 70, 41, 40, 14, WS_GROUP
+    DEFPUSHBUTTON   "Confirm", IDOK, 130, 41, 40, 14, WS_GROUP
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// ImageLinearStretch Dialog Box
+//
+IDD_IMAGE_LINEAR_STRETCH_BOX DIALOGEX 0, 0, 240, 90
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Image Linear Stretch Options"
+FONT 9, "MS Shell Dlg"
+BEGIN
+CTEXT           "source 1 value", IDC_STATIC, 10, 10, 45, 10, SS_NOPREFIX
+EDITTEXT        IDD_IMAGE_LINEAR_STRETCH_SRC1_EDIT, 65, 9, 45, 10
+CTEXT           "target 1 value", IDC_STATIC, 130, 10, 45, 10, SS_NOPREFIX
+EDITTEXT        IDD_IMAGE_LINEAR_STRETCH_TARGET1_EDIT, 185, 9, 45, 10
+CTEXT           "source 2 value", IDC_STATIC, 10, 35, 45, 10, SS_NOPREFIX
+EDITTEXT        IDD_IMAGE_LINEAR_STRETCH_SRC2_EDIT, 65, 34, 45, 10
+CTEXT           "target 2 value", IDC_STATIC, 130, 35, 45, 10, SS_NOPREFIX
+EDITTEXT        IDD_IMAGE_LINEAR_STRETCH_TARGET2_EDIT, 185, 34, 45, 10
+DEFPUSHBUTTON   "Default", IDYES, 30, 60, 40, 14, WS_GROUP
+DEFPUSHBUTTON   "Cancel", IDCANCEL, 100, 60, 40, 14, WS_GROUP
+DEFPUSHBUTTON   "Confirm", IDOK, 170, 60, 40, 14, WS_GROUP
+END
+
+#endif
+

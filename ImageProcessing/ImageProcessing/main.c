@@ -14,7 +14,27 @@
 #include <CommCtrl.h>
 #include <wincodecsdk.h>
 
+#include "resource.h"
 #include "cross_complex.h"
+
+enum
+{
+    WINDOW_WIDTH = 960,
+    WINDOW_HEIGHT = 640,
+
+    IMAGE_BINARIZE_THRESHOLD = 128,
+    
+    IMAGE_LINEAR_STRETCH_PHASE1_SRC = 80,
+    IMAGE_LINEAR_STRETCH_PHASE1_TARGET = 60,
+    IMAGE_LINEAR_STRETCH_PHASE2_SRC = 180,
+    IMAGE_LINEAR_STRETCH_PHASE2_TARGET = 200
+};
+
+static unsigned s_imageBinarizationThreshold = IMAGE_BINARIZE_THRESHOLD;
+static unsigned s_imageLinearStetchPhase1Src = IMAGE_LINEAR_STRETCH_PHASE1_SRC;
+static unsigned s_imageLinearStetchPhase1Target = IMAGE_LINEAR_STRETCH_PHASE1_TARGET;
+static unsigned s_imageLinearStetchPhase2Src = IMAGE_LINEAR_STRETCH_PHASE2_SRC;
+static unsigned s_imageLinearStetchPhase2Target = IMAGE_LINEAR_STRETCH_PHASE2_TARGET;
 
 static const char s_appName[] = "Image Processing";
 static HWND s_browseButton = NULL;
@@ -22,6 +42,7 @@ static HWND s_imagePathEdit = NULL;
 static HWND s_loadImageButton = NULL;
 static HWND s_generateImageButton = NULL;
 static HWND s_optionComboBox = NULL;
+static HWND s_settingsButton = NULL;
 static HBITMAP s_hBitmap = NULL;
 static HDC s_hMemDC = NULL;
 
@@ -38,14 +59,6 @@ static inline void ClearBitmapResources(void)
         s_hMemDC = NULL;
     }
 }
-
-enum
-{
-    WINDOW_WIDTH = 960,
-    WINDOW_HEIGHT = 640,
-
-    IMAGE_BINARIZE_THRESHOLD = 128
-};
 
 // Open the file browser dialog
 static void BrowseFileOpenDialog(HINSTANCE hInstance, HWND hWnd)
@@ -417,7 +430,7 @@ static void ImageBinarize(void)
             unsigned y = (unsigned)(0.3f * b + 0.59f * g + 0.11f * r);
 
             // Then, binarize the pixel according to the specified threshold
-            const unsigned threshold = IMAGE_BINARIZE_THRESHOLD;
+            const unsigned threshold = s_imageBinarizationThreshold;
             y = y < threshold ? 0U : 255U;
 
             dstImageData[dstIndex++] = y;       // b
@@ -438,13 +451,353 @@ static void ImageBinarize(void)
     free(dstImageData);
 }
 
+// Image Linear Stretch for 3 phases
+static void ImageLinearStretch3Phases(void)
+{
+    if (s_hBitmap == NULL) return;
+
+    // Get the current bitmap size
+    BITMAP bmp = { 0 };
+    GetObjectA(s_hBitmap, sizeof(BITMAP), &bmp);
+
+    const int orgWidth = (int)bmp.bmWidth;
+    const int orgHeight = (int)bmp.bmHeight;
+    const int orgComponents = (int)(bmp.bmBitsPixel / 8);
+    const int orgWidthBytes = (int)bmp.bmWidthBytes;
+    const int residuleWidthBytes = orgWidthBytes - orgWidth * orgComponents;
+    const int orgImageBufferSize = orgWidthBytes * orgHeight;
+
+    uint8_t* orgImageData = calloc(orgImageBufferSize, 1);
+    if (orgImageData == NULL) exit(-1);
+    // Read the raw data from the given HBITMAP object
+    if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
+    {
+        puts("Read original image data failed in `ColorToGrayTransformBitmap`!");
+        free(orgImageData);
+        return;
+    }
+
+    ClearBitmapResources();
+
+    // The destination BITMAP uses BGRA8888 format,
+    // So each pixel occupies 4 bytes
+    uint8_t* dstImageData = calloc(orgWidth * orgHeight, 4);
+    if (dstImageData == NULL) exit(-1);
+
+    const unsigned phase1Offset = s_imageLinearStetchPhase1Src;
+    const unsigned target1Offset = s_imageLinearStetchPhase1Target;
+    const float phase1Scale = (float)target1Offset / (float)phase1Offset;
+    const unsigned phase2Offset = s_imageLinearStetchPhase2Src;
+    const unsigned target2Offset = s_imageLinearStetchPhase2Target;
+    const float phase2Scale = (float)(target2Offset - s_imageLinearStetchPhase1Target) / (float)(phase2Offset - phase1Offset);
+    const float phase3Scale = (float)(255U - s_imageLinearStetchPhase2Target) / (float)(255U - phase2Offset);
+    const float roundingSupplement = 0.475f;
+
+    int orgIndex = 0, dstIndex = 0;
+    for (int row = 0; row < orgHeight; ++row)
+    {
+        for (int col = 0; col < orgWidth; ++col)
+        {
+            unsigned b = orgImageData[orgIndex + 0];
+            unsigned g = orgImageData[orgIndex + 1];
+            unsigned r = orgImageData[orgIndex + 2];
+
+            if (b < phase1Offset)
+            {
+                b = (unsigned)((float)b * phase1Scale + roundingSupplement);
+                if (b > 255U) b = 255U;
+            }
+            else if (b < phase2Offset)
+            {
+                b = (unsigned)((float)(b - phase1Offset) * phase2Scale + roundingSupplement) + target1Offset;
+                if (b > 255U) b = 255U;
+            }
+            else
+            {
+                b = (unsigned)((float)(b - phase2Offset) * phase3Scale + roundingSupplement) + target2Offset;
+                if (b > 255U) b = 255U;
+            }
+
+            if (g < phase1Offset)
+            {
+                g = (unsigned)((float)g * phase1Scale + roundingSupplement);
+                if (g > 255U) g = 255U;
+            }
+            else if (g < phase2Offset)
+            {
+                g = (unsigned)((float)(g - phase1Offset) * phase2Scale + roundingSupplement) + target1Offset;
+                if (g > 255U) g = 255U;
+            }
+            else
+            {
+                g = (unsigned)((float)(g - phase2Offset) * phase3Scale + roundingSupplement) + target2Offset;
+                if (g > 255U) g = 255U;
+            }
+
+            if (r < phase1Offset)
+            {
+                r = (unsigned)((float)r * phase1Scale + roundingSupplement);
+                if (r > 255U) r = 255U;
+            }
+            else if (r < phase2Offset)
+            {
+                r = (unsigned)((float)(r - phase1Offset) * phase2Scale + roundingSupplement) + target1Offset;
+                if (r > 255U) r = 255U;
+            }
+            else
+            {
+                r = (unsigned)((float)(r - phase2Offset) * phase3Scale + roundingSupplement) + target2Offset;
+                if (r > 255U) r = 255U;
+            }
+
+            dstImageData[dstIndex++] = b;
+            dstImageData[dstIndex++] = g;
+            dstImageData[dstIndex++] = r;
+            dstImageData[dstIndex++] = 255U;    // a
+
+            orgIndex += orgComponents;
+        }
+
+        orgIndex += residuleWidthBytes;
+    }
+
+    // Create the new BITMAP instance
+    s_hBitmap = CreateBitmap(orgWidth, orgHeight, 1U, 4U * 8U, dstImageData);
+
+    free(orgImageData);
+    free(dstImageData);
+}
+
 static void(* const s_comboBoxOperations[])(void) = {
     &ClearPreviousBitmap,
     &GenerateCustomBitmap,
     &ColorToGrayTransformBitmap,
     &ReversePixelBitmap,
-    &ImageBinarize
+    &ImageBinarize,
+    &ImageLinearStretch3Phases
 };
+
+// Initialize the specified dialog box control.
+// Setting the initial popup position.
+static void InitializeDialogBox(HWND hwndDlg)
+{
+    // Get the owner window and dialog box rectangles.
+    HWND hwndOwner = GetParent(hwndDlg);
+    if (hwndOwner == NULL) {
+        hwndOwner = GetDesktopWindow();
+    }
+
+    RECT rectOwner = { 0 };
+    RECT rectDlg = { 0 };
+    RECT rect = { 0 };
+    GetWindowRect(hwndOwner, &rectOwner);
+    GetWindowRect(hwndDlg, &rectDlg);
+    CopyRect(&rect, &rectOwner);
+
+    // Offset the owner and dialog box rectangles so that right and bottom 
+    // values represent the width and height, and then offset the owner again 
+    // to discard space taken up by the dialog box.
+    OffsetRect(&rectDlg, -rectDlg.left, -rectDlg.top);
+    OffsetRect(&rect, -rect.left, -rect.top);
+    OffsetRect(&rect, -rectDlg.right, -rectDlg.bottom);
+
+    // The new position is the sum of half the remaining space and the owner's original position.
+    SetWindowPos(hwndDlg,
+        HWND_TOP,
+        rectOwner.left + rect.right / 2,
+        rectOwner.top + rect.bottom / 2,
+        0, 0,          // Ignores size arguments. 
+        SWP_NOSIZE);
+}
+
+static INT_PTR CALLBACK ImageBinarizationSettingsProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    char thresholdEditBuf[16] = { '\0' };
+
+    switch (message)
+    {
+    case WM_INITDIALOG:
+    {
+        InitializeDialogBox(hwndDlg);
+
+        if (GetDlgCtrlID((HWND)wParam) != IDC_IMAGE_BINARIZE_THRESHOLD_EDIT)
+        {
+            SetFocus(GetDlgItem(hwndDlg, IDC_IMAGE_BINARIZE_THRESHOLD_EDIT));
+            return FALSE;
+        }
+
+        _itoa_s(s_imageBinarizationThreshold, thresholdEditBuf, sizeof(thresholdEditBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDC_IMAGE_BINARIZE_THRESHOLD_EDIT, thresholdEditBuf);
+
+        return TRUE;
+    }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDOK:
+            if (GetDlgItemTextA(hwndDlg, IDC_IMAGE_BINARIZE_THRESHOLD_EDIT, thresholdEditBuf, sizeof(thresholdEditBuf)) > 0)
+            {
+                const unsigned value = atoi(thresholdEditBuf);
+                if (value > 255U)
+                {
+                    MessageBoxA(hwndDlg, "The threshold value MUST BE in the range of [0, 255].", "Attention", MB_OK);
+                    break;
+                }
+
+                s_imageBinarizationThreshold = value;
+                EndDialog(hwndDlg, wParam);
+            }
+            else {
+                MessageBoxA(hwndDlg, "Please input threshold value.", "Attention", MB_OK);
+            }
+            break;
+
+        case IDYES:
+            // Default button clicked
+            _itoa_s(IMAGE_BINARIZE_THRESHOLD, thresholdEditBuf, sizeof(thresholdEditBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDC_IMAGE_BINARIZE_THRESHOLD_EDIT, thresholdEditBuf);
+
+            break;
+        
+        case IDCANCEL:
+            EndDialog(hwndDlg, wParam);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static INT_PTR CALLBACK ImageLinearStretchSettingsProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    char editBuf[16] = { '\0' };
+
+    switch (message)
+    {
+    case WM_INITDIALOG:
+    {
+        InitializeDialogBox(hwndDlg);
+
+        if (GetDlgCtrlID((HWND)wParam) != IDD_IMAGE_LINEAR_STRETCH_SRC1_EDIT)
+        {
+            SetFocus(GetDlgItem(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_SRC1_EDIT));
+            return FALSE;
+        }
+
+        _itoa_s(s_imageLinearStetchPhase1Src, editBuf, sizeof(editBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_SRC1_EDIT, editBuf);
+
+        _itoa_s(s_imageLinearStetchPhase1Target, editBuf, sizeof(editBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_TARGET1_EDIT, editBuf);
+
+        _itoa_s(s_imageLinearStetchPhase2Src, editBuf, sizeof(editBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_SRC2_EDIT, editBuf);
+
+        _itoa_s(s_imageLinearStetchPhase2Target, editBuf, sizeof(editBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_TARGET2_EDIT, editBuf);
+
+        return TRUE;
+    }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDOK:
+        {
+            if (GetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_SRC1_EDIT, editBuf, sizeof(editBuf)) == 0)
+            {
+                MessageBoxA(hwndDlg, "Please input source 1 value.", "Attention", MB_OK);
+                break;
+            }
+            const unsigned src1Value = atoi(editBuf);
+            if (src1Value > 254U)
+            {
+                MessageBoxA(hwndDlg, "The source 1 value MUST BE in the range of [0, 254].", "Attention", MB_OK);
+                break;
+            }
+
+            if (GetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_TARGET1_EDIT, editBuf, sizeof(editBuf)) == 0)
+            {
+                MessageBoxA(hwndDlg, "Please input target 1 value.", "Attention", MB_OK);
+                break;
+            }
+            const unsigned target1Value = atoi(editBuf);
+            if (target1Value > 254U)
+            {
+                MessageBoxA(hwndDlg, "The target 1 value MUST BE in the range of [0, 254].", "Attention", MB_OK);
+                break;
+            }
+
+            if (GetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_SRC2_EDIT, editBuf, sizeof(editBuf)) == 0)
+            {
+                MessageBoxA(hwndDlg, "Please input source 2 value.", "Attention", MB_OK);
+                break;
+            }
+            const unsigned src2Value = atoi(editBuf);
+            if (src2Value > 254U)
+            {
+                MessageBoxA(hwndDlg, "The source 2 value MUST BE in the range of [0, 254].", "Attention", MB_OK);
+                break;
+            }
+
+            if (GetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_TARGET2_EDIT, editBuf, sizeof(editBuf)) == 0)
+            {
+                MessageBoxA(hwndDlg, "Please input target 2 value.", "Attention", MB_OK);
+                break;
+            }
+            const unsigned target2Value = atoi(editBuf);
+            if (target2Value > 254U)
+            {
+                MessageBoxA(hwndDlg, "The target 2 value MUST BE in the range of [0, 254].", "Attention", MB_OK);
+                break;
+            }
+
+            if (src2Value <= src1Value)
+            {
+                MessageBoxA(hwndDlg, "source 2 value MUST BE larger than source 1 value.", "Attention", MB_OK);
+                break;
+            }
+            if (target2Value <= target1Value)
+            {
+                MessageBoxA(hwndDlg, "target 2 value MUST BE larger than target 1 value.", "Attention", MB_OK);
+                break;
+            }
+
+            s_imageLinearStetchPhase1Src = src1Value;
+            s_imageLinearStetchPhase1Target = target1Value;
+            s_imageLinearStetchPhase2Src = src2Value;
+            s_imageLinearStetchPhase2Target = target2Value;
+
+            EndDialog(hwndDlg, wParam);
+
+            break;
+        }
+
+        case IDYES:
+            // Default button clicked
+            _itoa_s(IMAGE_LINEAR_STRETCH_PHASE1_SRC, editBuf, sizeof(editBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_SRC1_EDIT, editBuf);
+
+            _itoa_s(IMAGE_LINEAR_STRETCH_PHASE1_TARGET, editBuf, sizeof(editBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_TARGET1_EDIT, editBuf);
+
+            _itoa_s(IMAGE_LINEAR_STRETCH_PHASE2_SRC, editBuf, sizeof(editBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_SRC2_EDIT, editBuf);
+
+            _itoa_s(IMAGE_LINEAR_STRETCH_PHASE2_TARGET, editBuf, sizeof(editBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDD_IMAGE_LINEAR_STRETCH_TARGET2_EDIT, editBuf);
+
+            break;
+
+        case IDCANCEL:
+            EndDialog(hwndDlg, wParam);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
 
 // Window message process procedure
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -489,6 +842,36 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             const LRESULT itemIndex = SendMessageA(s_optionComboBox, CB_GETCURSEL, 0, 0);
             if((size_t)itemIndex < sizeof(s_comboBoxOperations) / sizeof(s_comboBoxOperations[0])) {
                 s_comboBoxOperations[itemIndex]();
+            }
+        }
+        else if ((HWND)lParam == s_settingsButton)
+        {
+            const LRESULT itemIndex = SendMessageA(s_optionComboBox, CB_GETCURSEL, 0, 0);
+            if ((size_t)itemIndex >= sizeof(s_comboBoxOperations) / sizeof(s_comboBoxOperations[0])) break;
+
+            INT_PTR result = 0;
+            if (s_comboBoxOperations[itemIndex] == &ImageBinarize) {
+                result = DialogBoxA(hInstance, MAKEINTRESOURCEA(IDD_IMAGE_BINARIZE_BOX), hWnd, ImageBinarizationSettingsProc);
+            }
+            if (s_comboBoxOperations[itemIndex] == &ImageLinearStretch3Phases) {
+                result = DialogBoxA(hInstance, MAKEINTRESOURCEA(IDD_IMAGE_LINEAR_STRETCH_BOX), hWnd, ImageLinearStretchSettingsProc);
+            }
+
+            switch (result)
+            {
+            case IDOK:
+                // Complete the command
+                break;
+
+            case IDCANCEL:
+                // Cancel the command
+                break;
+
+            case IDYES:
+                break;
+
+            default:
+                break;
             }
         }
         break;
@@ -699,10 +1082,25 @@ int main(int argc, const char* argv[])
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Color to Gray");   // Color to gray operation
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Reverse Pixel");   // Reverse Pixel operation
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Binarization");    // Image Binarization
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Linear Stretch");  // Image Linear Stretch for 3 phases
 
     // Send the CB_SETCURSEL message to display an initial item in the selection field
     const WPARAM selectedItemIndex = 0;
     SendMessageA(s_optionComboBox, CB_SETCURSEL, selectedItemIndex, 0);
+
+    s_settingsButton = CreateWindowExA(
+        0,
+        WC_BUTTON,          // Predefined class;
+        "Settings",   // Button text 
+        WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+        780,                        // x position
+        10,                         // y position
+        90,                     // Button width
+        30,                     // Button height
+        hWnd,               // Parent window
+        NULL,                   // No menu.
+        hInstance,
+        NULL);                  // Pointer not needed.
 
     UpdateWindow(hWnd);
 
