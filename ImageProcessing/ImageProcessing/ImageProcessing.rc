@@ -64,5 +64,25 @@ BEGIN
     DEFPUSHBUTTON   "Confirm", IDOK, 130, 85, 40, 14, WS_GROUP
 END
 
+/////////////////////////////////////////////////////////////////////////////
+//
+// ImageExponentialStretch Dialog Box
+//
+IDD_IMAGE_EXPONENTIAL_STRETCH_BOX DIALOGEX 0, 0, 180, 110
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Image Exponential Stretch Options"
+FONT 9, "MS Shell Dlg"
+BEGIN
+    CTEXT           "constant a", IDC_STATIC, 10, 10, 45, 10, SS_NOPREFIX
+    EDITTEXT        IDD_IMAGE_EXPONENTIAL_STRETCH_A_EDIT, 75, 9, 45, 10
+    CTEXT           "constant b", IDC_STATIC, 10, 35, 45, 10, SS_NOPREFIX
+    EDITTEXT        IDD_IMAGE_EXPONENTIAL_STRETCH_B_EDIT, 75, 34, 45, 10
+    CTEXT           "reciprocal of c", IDC_STATIC, 10, 60, 55, 10, SS_NOPREFIX
+    EDITTEXT        IDD_IMAGE_EXPONENTIAL_STRETCH_C_EDIT, 75, 59, 45, 10
+    DEFPUSHBUTTON   "Default", IDYES, 10, 85, 40, 14, WS_GROUP
+    DEFPUSHBUTTON   "Cancel", IDCANCEL, 70, 85, 40, 14, WS_GROUP
+    DEFPUSHBUTTON   "Confirm", IDOK, 130, 85, 40, 14, WS_GROUP
+END
+
 #endif
 

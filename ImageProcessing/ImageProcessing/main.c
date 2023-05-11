@@ -29,9 +29,13 @@ enum
     IMAGE_LINEAR_STRETCH_PHASE2_SRC = 180,
     IMAGE_LINEAR_STRETCH_PHASE2_TARGET = 200,
 
-    IMAGE_LOG_NONLINEAR_STRETCH_A = 0,
-    IMAGE_LOG_NONLINEAR_STRETCH_B_RECIPROCAL = 30,
-    IMAGE_LOG_NONLINEAR_STRETCH_C = 2
+    IMAGE_LOG_STRETCH_A = 0,
+    IMAGE_LOG_STRETCH_B_RECIPROCAL = 30,
+    IMAGE_LOG_STRETCH_C = 2,
+
+    IMAGE_EXP_STRETCH_A = 0,
+    IMAGE_EXP_STRETCH_B = 2,
+    IMAGE_EXP_STRETCH_C_RECIPROCAL = 32
 };
 
 static unsigned s_imageBinarizationThreshold = IMAGE_BINARIZE_THRESHOLD;
@@ -40,9 +44,13 @@ static unsigned s_imageLinearStetchPhase1Target = IMAGE_LINEAR_STRETCH_PHASE1_TA
 static unsigned s_imageLinearStetchPhase2Src = IMAGE_LINEAR_STRETCH_PHASE2_SRC;
 static unsigned s_imageLinearStetchPhase2Target = IMAGE_LINEAR_STRETCH_PHASE2_TARGET;
 
-static int s_imageLogNonLinearStretchA = IMAGE_LOG_NONLINEAR_STRETCH_A;
-static int s_imageLogNonLinearReciprocalB = IMAGE_LOG_NONLINEAR_STRETCH_B_RECIPROCAL;
-static int s_imageLogNonLinearStretchC = IMAGE_LOG_NONLINEAR_STRETCH_C;
+static int s_imageLogNonLinearStretchA = IMAGE_LOG_STRETCH_A;
+static int s_imageLogNonLinearReciprocalB = IMAGE_LOG_STRETCH_B_RECIPROCAL;
+static int s_imageLogNonLinearStretchC = IMAGE_LOG_STRETCH_C;
+
+static int s_imageExponentialStretchA = IMAGE_EXP_STRETCH_A;
+static int s_imageExponentialStretchB = IMAGE_EXP_STRETCH_B;
+static int s_imageExponentialReciprocalC = IMAGE_EXP_STRETCH_C_RECIPROCAL;
 
 static const char s_appName[] = "Image Processing";
 static HWND s_browseButton = NULL;
@@ -352,7 +360,7 @@ static void ReversePixelBitmap(void)
     // Read the raw data from the given HBITMAP object
     if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
     {
-        puts("Read original image data failed in `ColorToGrayTransformBitmap`!");
+        puts("Read original image data failed in `ReversePixelBitmap`!");
         free(orgImageData);
         return;
     }
@@ -413,7 +421,7 @@ static void ImageBinarize(void)
     // Read the raw data from the given HBITMAP object
     if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
     {
-        puts("Read original image data failed in `ColorToGrayTransformBitmap`!");
+        puts("Read original image data failed in `ImageBinarize`!");
         free(orgImageData);
         return;
     }
@@ -480,7 +488,7 @@ static void ImageLinearStretch3Phases(void)
     // Read the raw data from the given HBITMAP object
     if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
     {
-        puts("Read original image data failed in `ColorToGrayTransformBitmap`!");
+        puts("Read original image data failed in `ImageLinearStretch3Phases`!");
         free(orgImageData);
         return;
     }
@@ -597,7 +605,7 @@ static void ImageLogNonlinearStretch(void)
     // Read the raw data from the given HBITMAP object
     if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
     {
-        puts("Read original image data failed in `ColorToGrayTransformBitmap`!");
+        puts("Read original image data failed in `ImageLogNonlinearStretch`!");
         free(orgImageData);
         return;
     }
@@ -609,6 +617,7 @@ static void ImageLogNonlinearStretch(void)
     uint8_t* dstImageData = calloc(orgWidth * orgHeight, 4);
     if (dstImageData == NULL) exit(-1);
 
+    const float constantA = (float)s_imageLogNonLinearStretchA;
     const float coeffBottom = (1.0f / (float)s_imageLogNonLinearReciprocalB) * logf((float)s_imageLogNonLinearStretchC) / logf(2.0f);
 
     int orgIndex = 0, dstIndex = 0;
@@ -622,17 +631,97 @@ static void ImageLogNonlinearStretch(void)
 
             // Apply the formula: dstPixel = a + ln(srcPixel + 1) / (b * ln(c))
             float tmp = (logf((float)b) + 1.0f) / logf(2.0f);
-            b = (int)((float)s_imageLogNonLinearStretchA + tmp / coeffBottom);
+            b = (int)(constantA + tmp / coeffBottom);
             if (b > 255) b = 255;
             if (b < 0) b = 0;
 
             tmp = (logf((float)g) + 1.0f) / logf(2.0f);
-            g = (int)((float)s_imageLogNonLinearStretchA + tmp / coeffBottom);
+            g = (int)(constantA + tmp / coeffBottom);
             if (g > 255) g = 255;
             if (g < 0) g = 0;
 
             tmp = (logf((float)r) + 1.0f) / logf(2.0f);
-            r = (int)((float)s_imageLogNonLinearStretchA + tmp / coeffBottom);
+            r = (int)(constantA + tmp / coeffBottom);
+            if (r > 255) r = 255;
+            if (r < 0) r = 0;
+
+            dstImageData[dstIndex++] = (uint8_t)b;
+            dstImageData[dstIndex++] = (uint8_t)g;
+            dstImageData[dstIndex++] = (uint8_t)r;
+            dstImageData[dstIndex++] = 255U;    // a
+
+            orgIndex += orgComponents;
+        }
+
+        orgIndex += residuleWidthBytes;
+    }
+
+    // Create the new BITMAP instance
+    s_hBitmap = CreateBitmap(orgWidth, orgHeight, 1U, 4U * 8U, dstImageData);
+
+    free(orgImageData);
+    free(dstImageData);
+}
+
+// Image Exponential Stretch
+static void ImageExponentialStretch(void)
+{
+    if (s_hBitmap == NULL) return;
+
+    // Get the current bitmap size
+    BITMAP bmp = { 0 };
+    GetObjectA(s_hBitmap, sizeof(BITMAP), &bmp);
+
+    const int orgWidth = (int)bmp.bmWidth;
+    const int orgHeight = (int)bmp.bmHeight;
+    const int orgComponents = (int)(bmp.bmBitsPixel / 8);
+    const int orgWidthBytes = (int)bmp.bmWidthBytes;
+    const int residuleWidthBytes = orgWidthBytes - orgWidth * orgComponents;
+    const int orgImageBufferSize = orgWidthBytes * orgHeight;
+
+    uint8_t* orgImageData = calloc(orgImageBufferSize, 1);
+    if (orgImageData == NULL) exit(-1);
+    // Read the raw data from the given HBITMAP object
+    if (GetBitmapBits(s_hBitmap, orgImageBufferSize, orgImageData) == 0)
+    {
+        puts("Read original image data failed in `ImageExponentialStretch`!");
+        free(orgImageData);
+        return;
+    }
+
+    ClearBitmapResources();
+
+    // The destination BITMAP uses BGRA8888 format,
+    // So each pixel occupies 4 bytes
+    uint8_t* dstImageData = calloc(orgWidth * orgHeight, 4);
+    if (dstImageData == NULL) exit(-1);
+
+    const float constantA = (float)s_imageExponentialStretchA;
+    const float constantB = (float)s_imageExponentialStretchB;
+    const float constantC = 1.0f / (float)s_imageExponentialReciprocalC;
+
+    int orgIndex = 0, dstIndex = 0;
+    for (int row = 0; row < orgHeight; ++row)
+    {
+        for (int col = 0; col < orgWidth; ++col)
+        {
+            int b = (unsigned)orgImageData[orgIndex + 0];
+            int g = (unsigned)orgImageData[orgIndex + 1];
+            int r = (unsigned)orgImageData[orgIndex + 2];
+
+            // Apply the formula: dstPixel = (b ^ (c * srcPixel - a)) - 1
+            float tmp = constantC * ((float)b - constantA);
+            b = (int)(powf(constantB, tmp) - 1.0f);
+            if (b > 255) b = 255;
+            if (b < 0) b = 0;
+
+            tmp = constantC * ((float)g - constantA);
+            g = (int)(powf(constantB, tmp) - 1.0f);
+            if (g > 255) g = 255;
+            if (g < 0) g = 0;
+
+            tmp = constantC * ((float)r - constantA);
+            r = (int)(powf(constantB, tmp) - 1.0f);
             if (r > 255) r = 255;
             if (r < 0) r = 0;
 
@@ -661,7 +750,8 @@ static void(* const s_comboBoxOperations[])(void) = {
     &ReversePixelBitmap,
     &ImageBinarize,
     &ImageLinearStretch3Phases,
-    &ImageLogNonlinearStretch
+    &ImageLogNonlinearStretch,
+    &ImageExponentialStretch
 };
 
 // Initialize the specified dialog box control.
@@ -962,13 +1052,103 @@ static INT_PTR CALLBACK ImageLogStretchSettingsProc(HWND hwndDlg, UINT message, 
 
         case IDYES:
             // Default button clicked
-            _itoa_s(IMAGE_LOG_NONLINEAR_STRETCH_A, editBuf, sizeof(editBuf), 10);
+            _itoa_s(IMAGE_LOG_STRETCH_A, editBuf, sizeof(editBuf), 10);
             SetDlgItemTextA(hwndDlg, IDD_IMAGE_LOG_STRETCH_A_EDIT, editBuf);
 
-            _itoa_s(IMAGE_LOG_NONLINEAR_STRETCH_B_RECIPROCAL, editBuf, sizeof(editBuf), 10);
+            _itoa_s(IMAGE_LOG_STRETCH_B_RECIPROCAL, editBuf, sizeof(editBuf), 10);
             SetDlgItemTextA(hwndDlg, IDD_IMAGE_LOG_STRETCH_B_EDIT, editBuf);
 
-            _itoa_s(IMAGE_LOG_NONLINEAR_STRETCH_C, editBuf, sizeof(editBuf), 10);
+            _itoa_s(IMAGE_LOG_STRETCH_C, editBuf, sizeof(editBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDD_IMAGE_LOG_STRETCH_C_EDIT, editBuf);
+
+            break;
+
+        case IDCANCEL:
+            EndDialog(hwndDlg, wParam);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static INT_PTR CALLBACK ImageExponentialStretchSettingsProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    char editBuf[16] = { '\0' };
+
+    switch (message)
+    {
+    case WM_INITDIALOG:
+    {
+        InitializeDialogBox(hwndDlg);
+
+        if (GetDlgCtrlID((HWND)wParam) != IDD_IMAGE_EXPONENTIAL_STRETCH_A_EDIT)
+        {
+            SetFocus(GetDlgItem(hwndDlg, IDD_IMAGE_EXPONENTIAL_STRETCH_A_EDIT));
+            return FALSE;
+        }
+
+        _itoa_s(s_imageExponentialStretchA, editBuf, sizeof(editBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDD_IMAGE_EXPONENTIAL_STRETCH_A_EDIT, editBuf);
+
+        _itoa_s(s_imageExponentialStretchB, editBuf, sizeof(editBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDD_IMAGE_EXPONENTIAL_STRETCH_B_EDIT, editBuf);
+
+        _itoa_s(s_imageExponentialReciprocalC, editBuf, sizeof(editBuf), 10);
+        SetDlgItemTextA(hwndDlg, IDD_IMAGE_EXPONENTIAL_STRETCH_C_EDIT, editBuf);
+
+        return TRUE;
+    }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDOK:
+        {
+            if (GetDlgItemTextA(hwndDlg, IDD_IMAGE_EXPONENTIAL_STRETCH_A_EDIT, editBuf, sizeof(editBuf)) == 0)
+            {
+                MessageBoxA(hwndDlg, "Please input constant a value.", "Attention", MB_OK);
+                break;
+            }
+            const int constantA = atoi(editBuf);
+
+            if (GetDlgItemTextA(hwndDlg, IDD_IMAGE_EXPONENTIAL_STRETCH_B_EDIT, editBuf, sizeof(editBuf)) == 0)
+            {
+                MessageBoxA(hwndDlg, "Please input constant b value.", "Attention", MB_OK);
+                break;
+            }
+            const int constantB = atoi(editBuf);
+            if (constantB <= 0)
+            {
+                MessageBoxA(hwndDlg, "b MUST BE greater than zero.", "Attention", MB_OK);
+                break;
+            }
+
+            if (GetDlgItemTextA(hwndDlg, IDD_IMAGE_EXPONENTIAL_STRETCH_C_EDIT, editBuf, sizeof(editBuf)) == 0)
+            {
+                MessageBoxA(hwndDlg, "Please input reciprocal of c value.", "Attention", MB_OK);
+                break;
+            }
+            const int reciprocalC = atoi(editBuf);
+
+            s_imageExponentialStretchA = constantA;
+            s_imageExponentialStretchB = constantB;
+            s_imageExponentialReciprocalC = reciprocalC;
+
+            EndDialog(hwndDlg, wParam);
+
+            break;
+        }
+
+        case IDYES:
+            // Default button clicked
+            _itoa_s(IMAGE_EXP_STRETCH_A, editBuf, sizeof(editBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDD_IMAGE_LOG_STRETCH_A_EDIT, editBuf);
+
+            _itoa_s(IMAGE_EXP_STRETCH_B, editBuf, sizeof(editBuf), 10);
+            SetDlgItemTextA(hwndDlg, IDD_IMAGE_LOG_STRETCH_B_EDIT, editBuf);
+
+            _itoa_s(IMAGE_EXP_STRETCH_C_RECIPROCAL, editBuf, sizeof(editBuf), 10);
             SetDlgItemTextA(hwndDlg, IDD_IMAGE_LOG_STRETCH_C_EDIT, editBuf);
 
             break;
@@ -1041,6 +1221,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             }
             else if (s_comboBoxOperations[itemIndex] == &ImageLogNonlinearStretch) {
                 result = DialogBoxA(hInstance, MAKEINTRESOURCEA(IDD_IMAGE_LOG_STRETCH_BOX), hWnd, ImageLogStretchSettingsProc);
+            }
+            else if (s_comboBoxOperations[itemIndex] == &ImageExponentialStretch) {
+                result = DialogBoxA(hInstance, MAKEINTRESOURCEA(IDD_IMAGE_EXPONENTIAL_STRETCH_BOX), hWnd, ImageExponentialStretchSettingsProc);
             }
 
             switch (result)
@@ -1263,13 +1446,14 @@ int main(int argc, const char* argv[])
         NULL);
 
     // Add string to comboBox.
-    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Clear");   // Clear previous bitmap using the background (white) color
-    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Custom");  // Generate a custom bitmap (with red, green and blue strips)
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Clear");           // Clear previous bitmap using the background (white) color
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Custom");          // Generate a custom bitmap (with red, green and blue strips)
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Color to Gray");   // Color to gray operation
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Reverse Pixel");   // Reverse Pixel operation
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Binarization");    // Image Binarization
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Linear Stretch");  // Image Linear Stretch for 3 phases
     SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Log Stretch");     // ImageLogNonlinearStretch
+    SendMessageA(s_optionComboBox, CB_ADDSTRING, 0, (LPARAM)"Exponential Stretch");     // ImageExponentialStretch
 
     // Send the CB_SETCURSEL message to display an initial item in the selection field
     const WPARAM selectedItemIndex = 0;
